@@ -21,6 +21,21 @@ def first_instance(given, term):
     return len(given)
 
 
+def handle_res_list(res):
+    unknown = 'Unknown Error in API transaction: [%s]' % str(res)
+    if not isinstance(res[0], dict):
+        raise RuntimeError(unknown)
+    errorCode = res[0].get('errorCode', None)
+    message = res[0].get('message', None)
+    fields = res[0].get('fields', [])
+    if errorCode is not None and message is not None:
+        msg_append = '(Fields: [%s])' % ', '.join(fields)
+        msg_append = '' if len(fields) == 0 else msg_append
+        raise RuntimeError('%s: %s%s' % (errorCode, message, msg_append))
+    raise RuntimeError(unknown)
+    return
+
+
 def escape_specials(text):
     """Escape any special characters in text for a url"""
     rsvd = r'(\?|\&|\||\!|\{|\}|\[|\]|\(|\)|\^|\~|\*|\:|\\|\"|\'|\+|\-)'
