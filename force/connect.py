@@ -1,11 +1,12 @@
 from . import credentials as cred
+from .util import flatten, format_search_terms
+from .util import to_be_deprecated
+from .soql import SOQL
 import requests
 import _thread as thread
 import time
-import collections
 import os
 import shutil
-import re
 import json
 
 stdoutmutex = thread.allocate_lock()
@@ -20,211 +21,11 @@ def create_local_creds():
         shutil.copy2(os.path.join(cp, 'public.py'), lcfp)
 
 
-def flatten(d, parent_key='', sep='.'):
-    items = []
-    for k, v in d.items():
-        new_key = parent_key + sep + k if parent_key else k
-        if isinstance(v, collections.MutableMapping):
-            items.extend(flatten(v, new_key, sep=sep).items())
-        else:
-            items.append((new_key, v))
-    return dict(items)
-
-
-def escape_specials(text):
-    """Escape any special characters in text for a url"""
-    rsvd = r'(\?|\&|\||\!|\{|\}|\[|\]|\(|\)|\^|\~|\*|\:|\\|\"|\'|\+|\-)'
-    p = re.compile(rsvd)
-    return p.sub(r'\\\1', text)
-
-
-def format_search_terms(terms, joinon='AND'):
-    """
-    Formats a list of search terms for SOSL searches.
-    Joiner may be AND or OR depending on desired behavior of search
-    """
-    joiner = '" %s "' % joinon.upper()
-    cterm = joiner.join([escape_specials(x) for x in terms])
-    return cterm if len(terms) < 2 else '"%s"' % cterm
-
-
-def first_instance(given, term):
-    given = given.upper()
-    if term in given:
-        return given.index(term)
-    return len(given)
-
-
 def proxies():
     dflt = 'PITC-Zscaler-US-MilwaukeeZ.proxy.corporate.ge.com'
     return {
         'http': 'http://%s:9400' % dflt,
         'https': 'https://%s:9400' % dflt}
-
-
-class SOSL():
-    def __init__(self, connection, **kwargs):
-        """
-        Creates an SOSL search query to run against given connection
-        Accepts the following kwargs:
-            terms: list of terms to search on
-            sobject: SalesForce Object to search (None if search all)
-            join_terms_on: AND (default) or OR
-            returning_fields: Fields to include in results
-        if no sobject specified, returning_fields are ignored
-        """
-        self.conn = connection
-        self.terms = kwargs.get('terms', [])
-        self.sobject = kwargs.get('sobject', None)
-        self.join_terms_on = kwargs.get('join_terms_on', 'AND')
-        return_fields = ['Id', 'Name']
-        return_fields.extend(kwargs.get('returning_fields', []))
-        self.returning_fields = list(set(return_fields))
-
-    def _make_returning(self):
-        if self.sobject is None:
-            return ''
-        fields = ','.join(self.returning_fields)
-        return '+RETURNING+%s+(%s)' % (self.sobject, fields)
-
-    def _search_url(self):
-        instance_url = self.conn.auth['instance_url']
-        base = '%s/services/data/v39.0/search?q=' % instance_url
-        find = 'FIND+{%s}+IN+ALL+FIELDS' % format_search_terms(
-            self.terms, self.join_terms_on)
-        url = ''.join([base, find, self._make_returning()])
-        return '+'.join(url.split(' '))
-
-    def results(self):
-        """Runs a search based on an sosl object"""
-        try:
-            result = self.conn.req_get(self._search_url())
-            result = [flatten(x) for x in result['searchRecords']]
-            return [{
-                k: v for k, v in x.items() if k in self.returning_fields}
-                for x in result]
-        except Exception as e:
-            print(e)
-            return None
-
-
-class SOQL():
-    def __init__(self, connection, **kwargs):
-        """
-        Creates a SOQL query for SalesForce and gets results
-        Accepts the following KeyWord Arguments:
-            sobject: SalesForce Object to query
-            fields: List of fields to query
-            filters: List of QueryFilter objects for where clause
-            filter_bool: Should top level filters be AND or OR?
-            limit: limit of records to return
-        """
-        self.conn = connection
-        self.fields = kwargs.get('fields', ['Id'])
-        self.sobject = kwargs.get('sobject', None)
-        filters = kwargs.get('filters', [])
-        self.filters = self.make_filters(filters)
-        self.filter_bool = kwargs.get('filter_bool', 'AND')
-        self.limit = kwargs.get('limit', 0)
-
-    def make_filters(self, given):
-        """handles given filters and creates filter objects"""
-        if isinstance(given, list):
-            return [self.make_filter(x) for x in given]
-        return [self.make_filter(given)]
-
-    def make_filter(self, given):
-        """makes individual filters"""
-        if isinstance(given, QueryFilter):
-            return given
-        return QueryFilter(given)
-
-    def append_filter(self, given):
-        """Appends Additional Filters"""
-        new_filter = self.make_filter(given)
-        self.filters.append(new_filter)
-
-    def _sql(self):
-        """Makes url safe sql text"""
-        text = ['SELECT %s' % ','.join(self.fields)]
-        text.append('FROM %s' % self.sobject)
-        where_bool = ' %s ' % self.filter_bool.upper()
-        text.append(
-            'WHERE %s' % where_bool.join(
-                [str(x) for x in self.filters]))
-        if self.limit > 0:
-            text.append('LIMIT %d' % self.limit)
-        return ' '.join(text)
-
-    def _url(self):
-        """Makes URL for query"""
-        instance_url = self.conn.auth['instance_url']
-        base = '%s/services/data/v39.0/query?q=' % instance_url
-        query_text = '+'.join(self._sql().split(' '))
-        return '%s%s' % (base, query_text)
-
-    def results(self):
-        try:
-            res = self.conn.req_get(self._url())
-            done = res['done']
-            self.conn.recs = [flatten(x) for x in res['records']]
-            totalSize = res['totalSize'] * 1
-            if not done:
-                self.conn.handle_additional(
-                    totalSize, res['nextRecordsUrl'])
-            raw_recs = self.conn.recs
-            return [{
-                k: v for k, v in x.items() if k in self.fields}
-                for x in raw_recs]
-        except Exception as e:
-            print(e)
-            return None
-
-
-class QueryFilter():
-    def __init__(self, text):
-        self.tokens = []
-        self.boolean = ' AND '
-        self._parse_text(text)
-
-    def _parse_text(self, given):
-        first_and = first_instance(given, ' AND ')
-        first_or = first_instance(given, ' OR ')
-        compare = first_and - first_or
-        if compare == 0:
-            self.tokens = [QueryToken(given)]
-            return
-        if compare > 0:
-            self.boolean = ' OR '
-        self.tokens.extend(
-            [QueryFilter(x) for x in given.split(self.boolean)])
-
-    def __str__(self):
-        return self.boolean.join([str(x) for x in self.tokens])
-
-
-class QueryToken():
-    def __init__(self, text):
-        self.field = ''
-        self.operator = ''
-        self.value = ''
-        self._parse_text(text)
-
-    def _parse_text(self, given):
-        operators = [
-            '=', '!=', '>', '<', '>=', '<=', ' IN ', ' NOT IN ',
-            ' LIKE ', ' NOT LIKE ']
-        positions = {x: first_instance(given, x) for x in operators}
-        min_pos = min([v for k, v in positions.items()])
-        if min_pos == len(given):
-            raise RuntimeError('No operator found in text: %s' % given)
-        self.operator = [k for k, v in positions.items() if v == min_pos][0]
-        self.field = given[:min_pos].strip()
-        val_start = min_pos + len(self.operator)
-        self.value = given[val_start:].strip()
-
-    def __str__(self):
-        return ''.join([self.field, self.operator, self.value])
 
 
 class Connection():
@@ -273,13 +74,10 @@ class Connection():
         """ formatted http headers for get requests """
         return {'Authorization': "Bearer " + self.auth['access_token']}
 
+    @to_be_deprecated('Connection.qurl', 'SOQL._url')
     def qurl(self, sql):
-        """ replaces spaces from soql statement with urlsafe characters.
-        Appends soql statement to url string"""
-        qs = "+".join(sql.split(' '))
-        url = self.auth['instance_url']
-        url += '/services/data/v37.0/query?q=' + qs
-        return url
+        soql = SOQL(self, sql=sql)
+        return soql._url()
 
     def search_pcl(self, term, robj, limit=0):
         """

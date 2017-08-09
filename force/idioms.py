@@ -16,6 +16,8 @@ def create_idiom_file():
 
 def get_depth(obj, level=1):
     """Returns depth of nested object"""
+    if not obj:
+        return level
     if isinstance(obj, dict):
         return max(get_depth(v, level + 1) for k, v in obj.items())
     if isinstance(obj, list):
@@ -47,7 +49,12 @@ class Idiom():
         fp = create_idiom_file()
         self.all_idioms = None
         with open(fp, 'r') as f:
-            self.all_idioms = json.load(f)
+            try:
+                self.all_idioms = json.load(f)
+            except json.JSONDecodeError as e:
+                self.all_idioms = {}
+            except Exception as e:
+                raise e
         self.fp = fp
 
     def matches(self):
