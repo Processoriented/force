@@ -1,16 +1,10 @@
 from . import credentials as cred
-from .util import flatten, format_search_terms
-from .util import to_be_deprecated
-from .soql import SOQL
+from .util import handle_res_list, to_be_deprecated
+from .soql import SOQL, SOSL
 import requests
-import _thread as thread
-import time
 import os
 import shutil
 import json
-
-stdoutmutex = thread.allocate_lock()
-exitmutexes = [True] * 75
 
 
 def create_local_creds():
@@ -135,47 +129,14 @@ class Connection():
             'labels': lfields,
             'rslts': rslts}
 
+    @to_be_deprecated('Connection.search', 'SOSL.get_results')
     def search(self, term, robj=None, rfields=None, limit=0):
-        """
-        Takes search term, and optional return object robj, return fields
-        rfields, and limit integer to give url for search.
-        """
-        if not isinstance(term, list):
-            term = [term]
-        cterm = format_search_terms(term)
-        base = '%s/services/data/v39.0/search?q=FIND+{%s}+IN+ALL+FIELDS' % (
-            self.auth['instance_url'], cterm)
-        if robj is not None:
-            cfields = "(Id,Name)"
-            if isinstance(rfields, list):
-                cfields = "(%s)" % ",".join(rfields)
-            elif isinstance(rfields, str):
-                cfields = "(%s)" % ",".join(
-                    [x.strip() for x in rfields.split(',')])
-            base = '%s+RETURNING+%s+%s' % (base, robj, cfields)
-        if int(limit) > 0:
-            base += "+LIMIT+%d" % int(limit)
-        url = "+".join(base.split(' '))
-        res = self.req_get(url)
-        if 'searchRecords' not in res.keys():
-            self.recs = None
-        else:
-            self.recs = [flatten(x) for x in res['searchRecords']]
-        return self.recs
-
-    def handle_res_list(self, res):
-        unknown = 'Unknown Error in API transaction: [%s]' % str(res)
-        if not isinstance(res[0], dict):
-            raise RuntimeError(unknown)
-        errorCode = res[0].get('errorCode', None)
-        message = res[0].get('message', None)
-        fields = res[0].get('fields', [])
-        if errorCode is not None and message is not None:
-            msg_append = '(Fields: [%s])' % ', '.join(fields)
-            msg_append = '' if len(fields) == 0 else msg_append
-            raise RuntimeError('%s: %s%s' % (errorCode, message, msg_append))
-        raise RuntimeError(unknown)
-        return
+        sosl = SOSL(
+            self,
+            terms=term,
+            sobject=robj,
+            returning_fields=rfields)
+        return sosl.get_results()
 
     def req_get(self, url):
         req = self.ses.get(
@@ -186,7 +147,7 @@ class Connection():
         if isinstance(res, dict):
             return res
         else:
-            self.handle_res_list(res)
+            handle_res_list(res)
 
     def req_post(self, url, data):
         """Posts into Force"""
@@ -200,7 +161,7 @@ class Connection():
             data=jdata)
         res = req.json()
         if isinstance(res, list):
-            self.handle_res_list(res)
+            handle_res_list(res)
         return res
 
     def req_patch(self, url, data):
@@ -220,48 +181,10 @@ class Connection():
         if self.verbose or always_print:
             print(msg)
 
+    @to_be_deprecated('Connection.query', 'SOQL.get_results')
     def query(self, sql, verbose=False):
-        """ runs query against force api. """
-        self.verbose = verbose
-        self.msg_print("initializing query.")
-        res = self.req_get(self.qurl(sql))
-        done = res['done']
-        self.recs = [flatten(x) for x in res['records']]
-        totalSize = res['totalSize'] * 1
-        if not done:
-            self.handle_additional(totalSize, res['nextRecordsUrl'])
-        self.msg_print('Retrieved %d of %d records.' % (
-            len(self.recs),
-            totalSize), verbose)
-        return self.recs
-
-    def handle_additional(self, totalSize, nrUrl):
-        """
-        if force result specifies more records, spawn threads to add them.
-        """
-        nrUrlBase = nrUrl.split('-')
-        next_Num = nrUrlBase.pop() * 1
-        ourls = []
-        idx = next_Num
-        while int(idx) < int(totalSize):
-            ourls.append("%s-%s" % ('-'.join(nrUrlBase), idx))
-            idx = str(int(next_Num) + int(idx))
-        while len(ourls) > 0:
-            while exitmutexes.count(True) == 0:
-                time.sleep(2)
-            nurl = ourls.pop(0)
-            th_id = exitmutexes.index(True)
-            exitmutexes[th_id] = False
-            thread.start_new_thread(self.get_next, (nurl, th_id))
-            msg = 'retrieving records starting at %s.' % nurl.split('-').pop()
-            self.msg_print(msg)
-        while exitmutexes.count(False) > 0:
-            time.sleep(5)
-
-    def get_next(self, url, thid):
-        res = self.req_get(self.auth['instance_url'] + url)
-        self.recs.extend([flatten(x) for x in res['records']])
-        exitmutexes[thid] = True
+        soql = SOQL(self, sql=sql)
+        return soql.get_results()
 
 
 class ConnTrainusers(Connection):
