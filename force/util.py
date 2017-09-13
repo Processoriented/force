@@ -21,8 +21,9 @@ def first_instance(given, term):
     return len(given)
 
 
-def handle_res_list(res):
-    unknown = 'Unknown Error in API transaction: [%s]' % str(res)
+def handle_res_list(res, url='url not captured.'):
+    unknown = 'Unknown Error in API transaction (%s):\n[%s]' % (
+        url, str(res))
     if not isinstance(res[0], dict):
         raise RuntimeError(unknown)
     errorCode = res[0].get('errorCode', None)
@@ -31,9 +32,9 @@ def handle_res_list(res):
     if errorCode is not None and message is not None:
         msg_append = '(Fields: [%s])' % ', '.join(fields)
         msg_append = '' if len(fields) == 0 else msg_append
-        raise RuntimeError('%s: %s%s' % (errorCode, message, msg_append))
+        raise RuntimeError('%s (%s):\n%s%s' % (
+            errorCode, url, message, msg_append))
     raise RuntimeError(unknown)
-    return
 
 
 def escape_specials(text):

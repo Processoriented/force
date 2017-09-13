@@ -292,6 +292,7 @@ class Description(object):
             valid values
             scored possible matches
         """
+        from .soql import SOSL
 
         # get fields for matching
         if match_on is None:
@@ -311,8 +312,11 @@ class Description(object):
         field_names = list(set(field_names))
 
         mterms = [v for k, v in validvals.items() if k in match_on]
-
-        rslt = self.conn.search(mterms, self.name, field_names)
+        rslt = SOSL(
+            self.conn,
+            terms=mterms,
+            sobject=self.name,
+            returning_fields=field_names).get_results()
 
         def mscore(rec, vv):
             scores = [
@@ -579,7 +583,7 @@ class FieldDef():
         """
         Returns corrected value
         """
-
+        from .soql import SOSL, SOQL
         # get basic info
         ref_objs = self.referenceTo
         pconn = self.parent.conn
@@ -587,9 +591,9 @@ class FieldDef():
 
         # check_id func queries for Id
         def check_id(pc, sobj, tid):
-            soql = "SELECT Id FROM %s WHERE Id='%s'" % (sobj, tid)
+            filters = ["Id='%s'" % tid]
             try:
-                rslt = pc.query(soql)
+                rslt = SOQL(pc, sobject=sobj, filters=filters).get_results()
                 if len(rslt) > 0:
                     return True
             except Exception as e:
@@ -598,7 +602,8 @@ class FieldDef():
 
         # search_obj func searches for text
         def search_obj(pc, sobj, ttxt):
-            return pc.search(ttxt, sobj)
+            results = SOSL(pc, terms=[ttxt], sobject=sobj).get_results()
+            return results
 
         # check idioms
         ctxt = 'value_%s' % self.parent.conn.env

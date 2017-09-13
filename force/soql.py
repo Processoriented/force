@@ -2,9 +2,8 @@ import os
 import json
 import _thread as thread
 import time
-from .connect import Connection
-from .util import flatten, first_instance, format_search_terms
-from .util import to_be_deprecated
+from .util import (
+    to_be_deprecated, flatten, first_instance, format_search_terms)
 
 
 stdoutmutex = thread.allocate_lock()
@@ -150,6 +149,7 @@ class StoredQuery():
         self.name_ = '.'.join(tname)
 
     def soql(self):
+        from .connect import Connection
         conn = getattr(self, 'conn', Connection())
         limit = 0 if self.limit is None else self.limit
         query_obj = SOQL(
@@ -166,8 +166,7 @@ class StoredQuery():
             'fields': self.fields,
             'filters': self.filters,
             'limit': self.limit,
-            'tested': self.tested
-        }
+            'tested': self.tested}
 
     def save_as(self, qname):
         fn = '%s.json' % qname
@@ -192,6 +191,7 @@ class StoredQuery():
         return self.save_as(sname)
 
     def test_query(self):
+        from .connect import Connection
         real_limit = self.limit
         self.limit = '5'
         resp = 'test passed.'
@@ -272,7 +272,8 @@ class SOQL():
         return '%s%s' % (base, query_text)
 
     def get_results(self):
-        return QueryResult(self).records
+        results = QueryResult(self).records
+        return [] if results is None else results
 
     @to_be_deprecated('SOQL.results', 'SOQL.get_results')
     def results(self):
@@ -283,6 +284,7 @@ class QueryResult():
     def __init__(self, query_):
         self.query_ = query_
         self._rec_keys = ['searchRecords', 'records']
+        self.records = []
         response = query_.conn.req_get(query_._url())
         for key, value in response.items():
             attr_ = 'raw_records' if key in self._rec_keys else key
@@ -300,7 +302,7 @@ class QueryResult():
         filtered = [{
             k: v for k, v in x.items() if k in self.query_.fields}
             for x in flat]
-        self.records = getattr(self, 'records', []).extend(filtered)
+        self.records.extend(filtered)
 
     def get_additional(self):
         if not self.has_additional():
@@ -313,7 +315,9 @@ class QueryResult():
 
     def has_additional(self):
         null_ = [None, '']
-        size = len(getattr(self, 'records', []))
+        records = getattr(self, 'records', [])
+        records = [] if records is None else records
+        size = len(records)
         more = [
             getattr(self, 'nextRecordsUrl', None) not in null_,
             getattr(self, 'done', True) is not True,
@@ -325,9 +329,14 @@ class QueryResult():
         next_num = int(split_url.pop())
         idx = next_num
         while idx < int(self.totalSize):
-            self.other_urls = getattr(
-                self, 'other_urls', []).append(
-                '%s-%s' % ('-'.join(split_url), idx))
+            other_urls = getattr(self, 'other_urls', [])
+            other_urls = [] if other_urls is None else other_urls
+            other_urls.append(
+                '%s%s-%s' % (
+                    self.query_.conn.auth['instance_url'],
+                    '-'.join(split_url),
+                    idx))
+            self.other_urls = other_urls
             idx += next_num
         self.other_urls = list(set(self.other_urls))
         return len(self.other_urls) > 0
@@ -412,9 +421,11 @@ class SOSL():
         self.terms = kwargs.get('terms', [])
         self.sobject = kwargs.get('sobject', None)
         self.join_terms_on = kwargs.get('join_terms_on', 'AND')
-        return_fields = ['Id', 'Name']
-        return_fields.extend(kwargs.get('returning_fields', []))
-        self.fields = list(set(return_fields))
+        fields = ['Id', 'Name']
+        given_fields = kwargs.get('returning_fields', [])
+        given_fields = [] if given_fields is None else given_fields
+        fields.extend(given_fields)
+        self.fields = list(set(fields))
         self.returning_fields = self.fields
 
     def _make_returning(self):
@@ -436,7 +447,8 @@ class SOSL():
         return self._url()
 
     def get_results(self):
-        return QueryResult(self).records
+        results = QueryResult(self).records
+        return [] if results is None else results
 
     @to_be_deprecated('SOSL.results', 'SOSL.get_results')
     def results(self):

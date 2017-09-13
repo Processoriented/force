@@ -1,6 +1,5 @@
 from . import credentials as cred
-from .util import handle_res_list, to_be_deprecated
-from .soql import SOQL, SOSL
+from .util import to_be_deprecated, handle_res_list
 import requests
 import os
 import shutil
@@ -70,6 +69,7 @@ class Connection():
 
     @to_be_deprecated('Connection.qurl', 'SOQL._url')
     def qurl(self, sql):
+        from .soql import SOQL
         soql = SOQL(self, sql=sql)
         return soql._url()
 
@@ -131,6 +131,7 @@ class Connection():
 
     @to_be_deprecated('Connection.search', 'SOSL.get_results')
     def search(self, term, robj=None, rfields=None, limit=0):
+        from .soql import SOSL
         sosl = SOSL(
             self,
             terms=term,
@@ -147,11 +148,18 @@ class Connection():
         if isinstance(res, dict):
             return res
         else:
-            handle_res_list(res)
+            handle_res_list(res, url)
+
+    def format_payload(self, payload):
+        bools = {k: v for k, v in payload.items() if isinstance(v, bool)}
+        others = {k: v for k, v in payload.items() if not isinstance(v, bool)}
+        for k, v in bools.items():
+            others[k] = str(v).lower()
+        return json.dumps(others)
 
     def req_post(self, url, data):
         """Posts into Force"""
-        jdata = json.dumps(data)
+        jdata = self.format_payload(data)
         post_headers = self.req_headers()
         post_headers['Content-Type'] = 'application/json'
         req = self.ses.post(
@@ -161,12 +169,13 @@ class Connection():
             data=jdata)
         res = req.json()
         if isinstance(res, list):
-            handle_res_list(res)
+            print(data)
+            handle_res_list(res, url)
         return res
 
     def req_patch(self, url, data):
         """Patches into Force"""
-        jdata = json.dumps(data)
+        jdata = self.format_payload(data)
         post_headers = self.req_headers()
         post_headers['Content-Type'] = 'application/json'
         req = self.ses.patch(
@@ -183,6 +192,7 @@ class Connection():
 
     @to_be_deprecated('Connection.query', 'SOQL.get_results')
     def query(self, sql, verbose=False):
+        from .soql import SOQL
         soql = SOQL(self, sql=sql)
         return soql.get_results()
 
